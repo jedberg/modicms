@@ -88,17 +88,18 @@ class Scan(_Component):
             super(Scan, self).iteration_complete()
 
 
-class ByPath(_Component):
-    def __init__(self, handlers):
+class MatchPath(_Component):
+    def __init__(self):
         self.handlers = []
-        for expr, handler in handlers.iteritems():
-            self.handlers.append((expr, handler))
-        super(ByPath, self).__init__()
+        super(MatchPath, self).__init__()
+
+    def match(self, expr, handler):
+        self.handlers.append((expr, handler))
+        return self
 
     def process(self, metadata, data):
         path = metadata['input_path']
 
-        # TODO: deterministic handling of multiple matches
         for expr, handler in self.handlers:
             result = re.search(expr, path)
             if result:
