@@ -20,6 +20,9 @@ class _ComponentWrapper(object):
     def iteration_complete(self):
         self.head.iteration_complete()
 
+    def get_mtime(self, metadata):
+        return self.head.get_mtime(metadata)
+
 
 class _Component(object):
     def __init__(self):
@@ -42,6 +45,9 @@ class _Component(object):
     def iteration_complete(self):
         self._check_pipeline_continues()
         self.next.iteration_complete()
+
+    def get_mtime(self, metadata):
+        return self.next.get_mtime(metadata)
 
 
 class Scan(_Component):
@@ -83,8 +89,13 @@ class Scan(_Component):
                     continue
                 path = os.path.join(root, file)
                 metadata = self._build_metadata(path)
-                self.log.debug("Processing '%s'..." % path)
-                super(Scan, self).process(metadata, None)
+
+                target_mtime = super(Scan, self).get_mtime(metadata)
+                if metadata['mtime'] > target_mtime:
+                    self.log.info("Processing '%s'..." % path)
+                    super(Scan, self).process(metadata, None)
+                else:
+                    self.log.info("Skipping unmodified file '%s'" % path)
             super(Scan, self).iteration_complete()
 
 
@@ -97,21 +108,32 @@ class MatchPath(_Component):
         self.handlers.append((expr, handler))
         return self
 
-    def process(self, metadata, data):
+    def _get_handler(self, metadata):
         path = metadata['input_path']
 
         for expr, handler in self.handlers:
             result = re.search(expr, path)
             if result:
-                self.log.debug("Matched expression /%s/" % expr)
-                handler.process(metadata, data)
-                return
+                return expr, handler
 
-        self.log.debug("No path match found. Skipping.")
+        return None, None
+
+    def process(self, metadata, data):
+        expr, handler = self._get_handler(metadata)
+        if handler:
+            self.log.debug("Matched expression /%s/" % expr)
+            handler.process(metadata, data)
+        else:
+            self.log.info("No path match found. Skipping.")
 
     def iteration_complete(self):
         for expr, handler in self.handlers:
             handler.iteration_complete()
+
+    def get_mtime(self, metadata):
+        expr, handler = self._get_handler(metadata)
+        if handler:
+            return handler.get_mtime(metadata)
 
 
 class Read(_Component):
@@ -145,16 +167,23 @@ try:
     import markdown
 
     class InterpretMarkdown(_Component):
-        def process(self, metadata, data):
+        def _morph_path(self, metadata):
             # change the output file's extension
             output_root, old_extension = os.path.splitext(
                 metadata['output_path'])
             metadata['output_path'] = output_root + '.html'
 
+        def process(self, metadata, data):
+            self._morph_path(metadata)
+
             md = markdown.Markdown()
             data = md.convert(data)
 
             super(InterpretMarkdown, self).process(metadata, data)
+
+        def get_mtime(self, metadata):
+            self._morph_path(metadata)
+            return super(InterpretMarkdown, self).get_mtime(metadata)
 
 except ImportError:
     pass
@@ -186,14 +215,17 @@ except ImportError:
     pass
 
 
-class _TerminalComponent(_Component):
+class _LocalTerminalComponent(_Component):
     def __init__(self, root):
         self.root = root
-        super(_TerminalComponent, self).__init__()
+        super(_LocalTerminalComponent, self).__init__()
+
+    def _absolute(self, metadata):
+        relative_output_path = metadata['output_path'][1:]
+        return os.path.join(self.root, relative_output_path)
 
     def process(self, metadata, data):
-        relative_output_path = metadata['output_path'][1:]
-        absolute = os.path.join(self.root, relative_output_path)
+        absolute = self._absolute(metadata)
 
         # make sure the containing directories exist
         dir = os.path.dirname(absolute)
@@ -206,8 +238,15 @@ class _TerminalComponent(_Component):
     def iteration_complete(self):
         pass
 
+    def get_mtime(self, metadata):
+        try:
+            absolute = self._absolute(metadata)
+            return os.path.getmtime(absolute)
+        except OSError:
+            pass
 
-class WriteTo(_TerminalComponent):
+
+class WriteTo(_LocalTerminalComponent):
     def _process(self, absolute, metadata, data):
         # write out the file
         with open(absolute, 'wb') as f:
@@ -217,6 +256,57 @@ class WriteTo(_TerminalComponent):
         os.utime(absolute, (metadata['mtime'], metadata['mtime']))
 
 
-class CopyTo(_TerminalComponent):
+class CopyTo(_LocalTerminalComponent):
     def _process(self, absolute, metadata, data):
         shutil.copy2(metadata['input_path'], absolute)
+
+
+try:
+    import boto
+    from boto.s3.key import Key
+
+    import time
+    import mimetypes
+
+    class _S3TerminalComponent(_Component):
+        def __init__(self, bucket):
+            self.connection = boto.connect_s3()
+            self.bucket = self.connection.get_bucket(bucket)
+            super(_Component, self).__init__()
+
+        def process(self, metadata, data):
+            key = self.bucket.new_key(metadata['output_path'])
+            key.set_metadata('modicms_mtime', str(time.time()))
+
+            type, encoding = mimetypes.guess_type(metadata['output_path'])
+            assert type is not None
+            headers = {
+                'Content-Type': type,
+            }
+
+            self._process(key, headers, metadata, data)
+
+        def iteration_complete(self):
+            pass
+
+        def get_mtime(self, metadata):
+            key = self.bucket.get_key(metadata['output_path'])
+            if key:
+                mtime = key.get_metadata('modicms_mtime')
+                if mtime:
+                    return float(mtime)
+
+    class WriteToS3(_S3TerminalComponent):
+        def _process(self, key, headers, metadata, data):
+            key.set_contents_from_string(data,
+                                         headers=headers,
+                                         policy='public-read')
+
+    class CopyToS3(_S3TerminalComponent):
+        def _process(self, key, headers, metadata, data):
+            key.set_contents_from_filename(metadata['input_path'],
+                                           headers=headers,
+                                           policy='public-read')
+
+except ImportError:
+    pass
