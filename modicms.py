@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import shutil
 import logging
 import cStringIO as StringIO
@@ -20,8 +21,8 @@ class _ComponentWrapper(object):
     def iteration_complete(self):
         self.head.iteration_complete()
 
-    def get_mtime(self, metadata):
-        return self.head.get_mtime(metadata)
+    def is_invalid(self, metadata, source_mtime):
+        return self.head.is_invalid(metadata, source_mtime)
 
 
 class _Component(object):
@@ -46,8 +47,8 @@ class _Component(object):
         self._check_pipeline_continues()
         self.next.iteration_complete()
 
-    def get_mtime(self, metadata):
-        return self.next.get_mtime(metadata)
+    def is_invalid(self, metadata, source_mtime):
+        return self.next.is_invalid(metadata, source_mtime)
 
 
 class Scan(_Component):
@@ -90,12 +91,11 @@ class Scan(_Component):
                 path = os.path.join(root, file)
                 metadata = self._build_metadata(path)
 
-                target_mtime = super(Scan, self).get_mtime(metadata)
-                if metadata['mtime'] > target_mtime:
-                    self.log.info("Processing '%s'..." % path)
+                if super(Scan, self).is_invalid(metadata, metadata['mtime']):
+                    self.log.debug("Processing '%s'..." % path)
                     super(Scan, self).process(metadata, None)
                 else:
-                    self.log.info("Skipping unmodified file '%s'" % path)
+                    self.log.debug("Skipping unmodified file '%s'" % path)
             super(Scan, self).iteration_complete()
 
 
@@ -130,10 +130,10 @@ class MatchPath(_Component):
         for expr, handler in self.handlers:
             handler.iteration_complete()
 
-    def get_mtime(self, metadata):
+    def is_invalid(self, metadata, source_mtime):
         expr, handler = self._get_handler(metadata)
         if handler:
-            return handler.get_mtime(metadata)
+            return handler.is_invalid(metadata, source_mtime)
 
 
 class Read(_Component):
@@ -181,9 +181,10 @@ try:
 
             super(InterpretMarkdown, self).process(metadata, data)
 
-        def get_mtime(self, metadata):
+        def is_invalid(self, metadata, source_mtime):
             self._morph_path(metadata)
-            return super(InterpretMarkdown, self).get_mtime(metadata)
+            return super(InterpretMarkdown, self).is_invalid(metadata,
+                                                             source_mtime)
 
 except ImportError:
     pass
@@ -198,18 +199,33 @@ try:
             self.default_template = template_path
             super(WrapInMako, self).__init__()
 
-        def process(self, metadata, data):
+        def _get_template(self, metadata):
             lookup = TemplateLookup(directories=[metadata['root']])
+            template_name = metadata.get('template', self.default_template)
+            try:
+                return lookup.get_template(template_name)
+            except:
+                pass
+
+        def process(self, metadata, data):
+            template = self._get_template(metadata)
 
             try:
-                template_name = metadata.get('template', self.default_template)
-                template = lookup.get_template(template_name)
                 rendered = template.render(content=data, **metadata)
             except:
                 self.log.error(exceptions.text_error_template().render())
                 return
 
             super(WrapInMako, self).process(metadata, rendered)
+
+        def is_invalid(self, metadata, source_mtime):
+            template = self._get_template(metadata)
+            template_mtime = os.path.getmtime(template.filename)
+            latest_source_mtime = max(template_mtime, source_mtime)
+
+            return super(WrapInMako, self).is_invalid(metadata,
+                                                      latest_source_mtime)
+
 
 except ImportError:
     pass
@@ -232,18 +248,19 @@ class _LocalTerminalComponent(_Component):
         if not os.path.exists(dir):
             os.makedirs(dir)
 
+        print >>sys.stderr, metadata['output_path']
         self._process(absolute, metadata, data)
-        self.log.info(absolute)
 
     def iteration_complete(self):
         pass
 
-    def get_mtime(self, metadata):
+    def is_invalid(self, metadata, source_mtime):
         try:
             absolute = self._absolute(metadata)
-            return os.path.getmtime(absolute)
+            target_mtime = os.path.getmtime(absolute)
+            return target_mtime < source_mtime
         except OSError:
-            pass
+            return True
 
 
 class WriteTo(_LocalTerminalComponent):
@@ -251,9 +268,6 @@ class WriteTo(_LocalTerminalComponent):
         # write out the file
         with open(absolute, 'wb') as f:
             f.write(data)
-
-        # set the mtime
-        os.utime(absolute, (metadata['mtime'], metadata['mtime']))
 
 
 class CopyTo(_LocalTerminalComponent):
@@ -267,6 +281,11 @@ try:
 
     import time
     import mimetypes
+
+    mimetypes.types_map.setdefault('.ttf', 'application/octet-stream')
+    mimetypes.types_map.setdefault('.otf', 'application/octet-stream')
+    mimetypes.types_map.setdefault('.eot', 'application/vnd.ms-fontobject')
+    mimetypes.types_map.setdefault('.woff', 'application/x-woff')
 
     class _S3TerminalComponent(_Component):
         def __init__(self, bucket):
@@ -284,17 +303,19 @@ try:
                 'Content-Type': type,
             }
 
+            print >>sys.stderr, metadata['output_path']
             self._process(key, headers, metadata, data)
 
         def iteration_complete(self):
             pass
 
-        def get_mtime(self, metadata):
+        def is_invalid(self, metadata, source_mtime):
             key = self.bucket.get_key(metadata['output_path'])
             if key:
                 mtime = key.get_metadata('modicms_mtime')
                 if mtime:
-                    return float(mtime)
+                    return float(mtime) < source_mtime
+            return True
 
     class WriteToS3(_S3TerminalComponent):
         def _process(self, key, headers, metadata, data):
