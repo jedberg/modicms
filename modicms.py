@@ -18,8 +18,8 @@ class _ComponentWrapper(object):
     def process(self, metadata, data):
         self.head.process(metadata, data)
 
-    def iteration_complete(self):
-        self.head.iteration_complete()
+    def all_items_processed(self):
+        self.head.all_items_processed()
 
     def is_invalid(self, metadata, source_mtime):
         return self.head.is_invalid(metadata, source_mtime)
@@ -43,9 +43,9 @@ class _Component(object):
         self._check_pipeline_continues()
         self.next.process(metadata, data)
 
-    def iteration_complete(self):
+    def all_items_processed(self):
         self._check_pipeline_continues()
-        self.next.iteration_complete()
+        self.next.all_items_processed()
 
     def is_invalid(self, metadata, source_mtime):
         return self.next.is_invalid(metadata, source_mtime)
@@ -96,7 +96,7 @@ class Scan(_Component):
                     super(Scan, self).process(metadata, None)
                 else:
                     self.log.debug("Skipping unmodified file '%s'" % path)
-            super(Scan, self).iteration_complete()
+            super(Scan, self).all_items_processed()
 
 
 class MatchPath(_Component):
@@ -126,9 +126,9 @@ class MatchPath(_Component):
         else:
             self.log.info("No path match found. Skipping.")
 
-    def iteration_complete(self):
+    def all_items_processed(self):
         for expr, handler in self.handlers:
-            handler.iteration_complete()
+            handler.all_items_processed()
 
     def is_invalid(self, metadata, source_mtime):
         expr, handler = self._get_handler(metadata)
@@ -251,7 +251,7 @@ class _LocalTerminalComponent(_Component):
         print >>sys.stderr, metadata['output_path']
         self._process(absolute, metadata, data)
 
-    def iteration_complete(self):
+    def all_items_processed(self):
         pass
 
     def is_invalid(self, metadata, source_mtime):
@@ -306,7 +306,7 @@ try:
             print >>sys.stderr, metadata['output_path']
             self._process(key, headers, metadata, data)
 
-        def iteration_complete(self):
+        def all_items_processed(self):
             pass
 
         def is_invalid(self, metadata, source_mtime):
