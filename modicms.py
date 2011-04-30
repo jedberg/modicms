@@ -256,7 +256,6 @@ except ImportError:
     pass
 
 try:
-    from mako.template import Template
     from mako.lookup import TemplateLookup
     from mako import exceptions
 
@@ -343,7 +342,6 @@ class CopyTo(_LocalTerminalComponent):
 
 try:
     import boto
-    from boto.s3.key import Key
 
     import time
     import mimetypes
