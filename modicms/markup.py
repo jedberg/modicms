@@ -1,6 +1,8 @@
 import os
+import urllib
 
 from modicms.base import _Component
+
 
 class _MarkupComponent(_Component):
     def _morph_path(self, metadata):
@@ -21,7 +23,7 @@ class _MarkupComponent(_Component):
     def is_invalid(self, metadata, source_mtime):
         morphed = self._morph_path(metadata)
         return super(_MarkupComponent, self).is_invalid(
-            morphed, 
+            morphed,
             source_mtime
         )
 
@@ -52,3 +54,22 @@ try:
 
 except ImportError:
     pass
+
+
+class CompressJavascript(_MarkupComponent):
+    output_extension = '.js'
+
+    def _process(self, metadata, data):
+        params = urllib.urlencode({
+            'js_code': data,
+            'compilation_level': 'SIMPLE_OPTIMIZATIONS',
+            'output_format': 'text',
+            'output_info': 'compiled_code',
+        })
+
+        resp = urllib.urlopen(
+            'http://closure-compiler.appspot.com/compile',
+            params
+        )
+
+        return resp.read()
