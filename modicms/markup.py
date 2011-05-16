@@ -12,10 +12,10 @@ class _MarkupComponent(_Component):
         metadata['output_path'] = output_root + self.output_extension
         return metadata
 
-    def process(self, metadata, data):
+    def process_and_return(self, metadata, data):
         morphed = self._morph_path(metadata)
         data = self._process(morphed, data)
-        super(_MarkupComponent, self).process(morphed, data)
+        return morphed, data
 
     def _process(slf, metadata, data):
         raise NotImplementedError()
