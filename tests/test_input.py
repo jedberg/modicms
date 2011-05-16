@@ -5,6 +5,7 @@ from modicms.input import Read
 
 TEST_STRING = "This is a test of the emergency broadcast system."
 
+
 class TestRead(object):
     def setUp(self):
         fd, name = tempfile.mkstemp()
@@ -18,7 +19,7 @@ class TestRead(object):
     def testRead(self):
         reader = Read()
         metadata, data = reader.process_and_return(
-            {'input_path': self.name}, 
+            {'input_path': self.name},
             None
         )
         assert data == TEST_STRING
