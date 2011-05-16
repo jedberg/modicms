@@ -5,13 +5,13 @@ from modicms.base import _Component
 
 
 class Read(_Component):
-    def process(self, metadata, data):
+    def process_and_return(self, metadata, data):
         assert data is None
 
         with open(metadata['input_path'], 'r') as f:
             data = f.read()
 
-        super(Read, self).process(metadata, data)
+        return metadata, data
 
 
 class Scan(_Component):

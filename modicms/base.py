@@ -36,7 +36,11 @@ class _Component(object):
 
     def process(self, metadata, data):
         self._check_pipeline_continues()
+        metadata, data = self.process_and_return(metadata, data)
         self.next.process(metadata, data)
+
+    def process_and_return(self, metadata, data):
+        return metadata, data
 
     def all_items_processed(self):
         self._check_pipeline_continues()
